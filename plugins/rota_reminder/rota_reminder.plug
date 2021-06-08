@@ -1,0 +1,9 @@
+[Core]
+Name = RotaReminder
+Module = rota_reminder
+
+[Documentation]
+Description = Automatic Rota Reminders for each week based on Confluence schedules
+
+[Python]
+Version = 2+
