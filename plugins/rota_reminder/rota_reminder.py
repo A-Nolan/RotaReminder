@@ -1,11 +1,16 @@
-import json
+import os
+import errbot
 import requests
 from bs4 import BeautifulSoup
-import os
+import schedule
+import time
 
 from errbot import BotPlugin, botcmd, CommandError
+from errbot.backends.slack_rtm import SlackAPIResponseError
 from dotenv import load_dotenv
 load_dotenv()
+
+
 
 
 class RotaReminder(BotPlugin):
@@ -16,7 +21,15 @@ class RotaReminder(BotPlugin):
         if 'saved_rotas' not in self:
             self['saved_rotas'] = {}
 
-        
+        # Need to start this from a poller otherwise activate() will never finish
+        self.start_poller(10, self.schedule, times=1)
+
+    def schedule(self):
+        schedule.every(5).seconds.do(self.post_all_rotas)
+
+        while True:
+            schedule.run_pending()
+            time.sleep(1)
 
     #################################
     # HELPER FUNCTIONS
@@ -145,6 +158,49 @@ class RotaReminder(BotPlugin):
 
         return user_list
 
+    def post_all_rotas(self):
+        rota_info = self['saved_rotas']
+
+        for k, v in rota_info.items():
+            confluence_page_id = k
+            search_date = '2021-06-07'
+
+            raw_html = RotaReminder.get_page_html(confluence_page_id)
+            table_html = RotaReminder.get_table_html(raw_html)
+            headers = RotaReminder.get_table_headers(table_html)
+            users = RotaReminder.get_users_from_table(table_html, search_date)
+            
+            field_list = []
+            page_url = f'https://zendesk.atlassian.net/wiki/spaces/TALK/pages/{confluence_page_id}' 
+
+            for i in range(len(headers)):
+                if users[i] == 'None':
+                    field = [headers[i], ' - ']
+                else:
+                    slack_user = '@' + RotaReminder.get_slack_username(users[i])
+                    field = [headers[i], slack_user]
+                field_list.append(field)
+
+            try:
+                self.send_card(
+                    to=self.build_identifier(v['slack_channel']),
+                    title=raw_html['title'],
+                    link=page_url,
+                    fields=field_list,
+                    color='red',
+                )
+            except SlackAPIResponseError:
+                room = self.build_identifier(v['slack_channel'])
+                room.join()
+                self.send_card(
+                    to=self.build_identifier(v['slack_channel']),
+                    title=raw_html['title'],
+                    link=page_url,
+                    fields=field_list,
+                    color='red',
+                )
+
+
     #################################
     # BOT COMMANDS
     #################################
@@ -189,9 +245,8 @@ class RotaReminder(BotPlugin):
                     ('Confluence Page ID', k),
                 ),
                 color='blue',
-                to=msg,
+                in_reply_to=msg,
             )
-    
 
     #################################
     # BOT TESTING COMMANDS
@@ -233,6 +288,14 @@ class RotaReminder(BotPlugin):
     @botcmd()
     def test_storage_read(self, msg, args):
         return self['saved_rotas']
+
+    
+
+    def test_schedule(self):
+        self.send(
+            self.build_identifier('#lab-day'),
+            'I should print every 10 seconds',
+        )
 
     #################################
     # ADMIN COMMANDS
