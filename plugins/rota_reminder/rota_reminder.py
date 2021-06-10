@@ -11,6 +11,13 @@ load_dotenv()
 class RotaReminder(BotPlugin):
     """Errbot plugin to help automate slack reminders"""
 
+    def activate(self):
+        super().activate()
+        if 'saved_rotas' not in self:
+            self['saved_rotas'] = {}
+
+        
+
     #################################
     # HELPER FUNCTIONS
     #################################
@@ -105,6 +112,7 @@ class RotaReminder(BotPlugin):
             
         return header_list
 
+    # TODO Handle two users in one column e.g @Aaron Nolan + @Iulia Birlaneau
     @staticmethod
     def get_users_from_table(table_soup, search_date):
         """Get all the specified users from the dates row as a list
@@ -138,17 +146,73 @@ class RotaReminder(BotPlugin):
         return user_list
 
     #################################
+    # BOT COMMANDS
+    #################################
+
+    @botcmd(split_args_with=', ')
+    def add_rota(self, msg, args):
+        """
+        Add rota to saved list - Usage: !add_rota <rota_name>, <confluence_page_id>, <slack_channel>
+        """
+
+        rota_name = args[0]
+        page_id = args[1]
+        slack_channel = args[2]
+        creator = msg.frm.fullname.split(' ', 1)
+
+        rota_info = self['saved_rotas']
+        rota_info[page_id] = {
+            'rota_name': rota_name,
+            'slack_channel': '#' + slack_channel,
+            'rota_creator': msg.frm.fullname
+        }
+
+        self['saved_rotas'] = rota_info
+        ret_str = f'Thanks {creator[0]}, I have added {rota_name} to the list!\n'
+        return ret_str + f'It will be posted in #{slack_channel} every Monday at 9am'
+
+    @botcmd()
+    def display_rotas(self, msg, args):
+        rota_info = self['saved_rotas']
+
+        for k, v in rota_info.items():
+
+            name = v['rota_name']
+            chan = v['slack_channel']
+            creator = v['rota_creator']
+
+            self.send_card(
+                title=name,
+                fields=(
+                    ('Slack Channel', chan),
+                    ('Creator', creator),
+                    ('Confluence Page ID', k),
+                ),
+                color='blue',
+                to=msg,
+            )
+    
+
+    #################################
     # BOT TESTING COMMANDS
     #################################
 
     @botcmd(split_args_with=", ")
     def test_display_rota(self, msg, args):
-        raw_html = RotaReminder.get_page_html(args[0])
+        """
+        Display a single rota - Usage: !test_display_rota <confluence_page_id>, <YYYY-MM-DD>
+        """
+
+        confluence_page_id = args[0]
+        search_date = args[1]
+        
+        raw_html = RotaReminder.get_page_html(confluence_page_id)
         table_html = RotaReminder.get_table_html(raw_html)
         headers = RotaReminder.get_table_headers(table_html)
-        users = RotaReminder.get_users_from_table(table_html, args[1])
+        users = RotaReminder.get_users_from_table(table_html, search_date)
         
         field_list = []
+        page_url = f'https://zendesk.atlassian.net/wiki/spaces/TALK/pages/{confluence_page_id}' 
 
         for i in range(len(headers)):
             if users[i] == 'None':
@@ -160,7 +224,20 @@ class RotaReminder(BotPlugin):
 
         self.send_card(
             title=raw_html['title'],
+            link=page_url,
             fields=field_list,
             color='red',
             in_reply_to=msg,
         )
+
+    @botcmd()
+    def test_storage_read(self, msg, args):
+        return self['saved_rotas']
+
+    #################################
+    # ADMIN COMMANDS
+    #################################
+
+    @botcmd()
+    def clear_saved_rotas(self, msg, args):
+        self['saved_rotas'] = {}
