@@ -19,7 +19,6 @@ BOT_LOG_FILE = r'/Users/aaron.nolan/Desktop/LabDays/RotaReminder/errbot.log'
 BOT_LOG_LEVEL = logging.DEBUG
 
 BOT_IDENTITY = {
-    #"token": SLACK_TOKEN
     "token": SLACK_TOKEN,
 }
 BOT_ADMINS = ('@aaron.nolan', )  # !! Don't leave that to "@CHANGE_ME" if you connect your errbot to a chat system !!

@@ -6,7 +6,7 @@ import schedule
 import time
 
 from errbot import BotPlugin, botcmd, CommandError
-from errbot.backends.slack_rtm import SlackAPIResponseError
+from errbot.backends.slack import SlackRoom
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -181,24 +181,13 @@ class RotaReminder(BotPlugin):
                     field = [headers[i], slack_user]
                 field_list.append(field)
 
-            try:
-                self.send_card(
-                    to=self.build_identifier(v['slack_channel']),
-                    title=raw_html['title'],
-                    link=page_url,
-                    fields=field_list,
-                    color='red',
-                )
-            except SlackAPIResponseError:
-                room = self.build_identifier(v['slack_channel'])
-                room.join()
-                self.send_card(
-                    to=self.build_identifier(v['slack_channel']),
-                    title=raw_html['title'],
-                    link=page_url,
-                    fields=field_list,
-                    color='red',
-                )
+            self.send_card(
+                to=self.build_identifier(v['slack_channel']),
+                title=raw_html['title'],
+                link=page_url,
+                fields=field_list,
+                color='red',
+            )
 
 
     #################################
@@ -225,7 +214,8 @@ class RotaReminder(BotPlugin):
 
         self['saved_rotas'] = rota_info
         ret_str = f'Thanks {creator[0]}, I have added {rota_name} to the list!\n'
-        return ret_str + f'It will be posted in #{slack_channel} every Monday at 9am'
+        ret_str = ret_str + f'It will be posted in #{slack_channel} every Monday at 9am'
+        return ret_str + f'Please ensure I am added to #{slack_channel}, I cannot add myself :('
 
     @botcmd()
     def display_rotas(self, msg, args):
@@ -295,6 +285,15 @@ class RotaReminder(BotPlugin):
         self.send(
             self.build_identifier('#lab-day'),
             'I should print every 10 seconds',
+        )
+
+    @botcmd()
+    def test_join(self, msg, args):
+        self.build_identifier('#general').join()
+        self.log.warn(room)
+        self.send(
+            room,
+            'I got into the room',
         )
 
     #################################
