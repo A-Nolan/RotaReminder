@@ -11,8 +11,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-
-
 class RotaReminder(BotPlugin):
     """Errbot plugin to help automate slack reminders"""
 
@@ -22,7 +20,7 @@ class RotaReminder(BotPlugin):
             self['saved_rotas'] = {}
 
         # Need to start this from a poller otherwise activate() will never finish
-        self.start_poller(10, self.schedule, times=1)
+        # self.start_poller(10, self.schedule, times=1)
 
     def schedule(self):
         schedule.every(5).seconds.do(self.post_all_rotas)
@@ -218,6 +216,18 @@ class RotaReminder(BotPlugin):
         return ret_str + f'Please ensure I am added to #{slack_channel}, I cannot add myself :('
 
     @botcmd()
+    def remove_rota(self, msg, args):
+        rota_info = self['saved_rotas']
+
+        try:
+            del rota_info[args]
+            self['saved_rotas'] = rota_info
+            return f'{args} was successfully removed from the list'
+        except KeyError:
+            self['saved_rotas'] = rota_info
+            return f'{args} was not in the saved rota IDs, please enter a valid ID'
+
+    @botcmd()
     def display_rotas(self, msg, args):
         rota_info = self['saved_rotas']
 
@@ -280,7 +290,6 @@ class RotaReminder(BotPlugin):
         return self['saved_rotas']
 
     
-
     def test_schedule(self):
         self.send(
             self.build_identifier('#lab-day'),

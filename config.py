@@ -12,10 +12,10 @@ SLACK_TOKEN = os.environ.get("SLACK_TOKEN")
 
 BACKEND = 'Slack'  # Errbot will start in text mode (console only mode) and will answer commands from there.
 
-BOT_DATA_DIR = r'/Users/aaron.nolan/Desktop/LabDays/RotaReminder/data'
-BOT_EXTRA_PLUGIN_DIR = r'/Users/aaron.nolan/Desktop/LabDays/RotaReminder/plugins'
+BOT_DATA_DIR = r'./data'
+BOT_EXTRA_PLUGIN_DIR = r'./plugins'
 
-BOT_LOG_FILE = r'/Users/aaron.nolan/Desktop/LabDays/RotaReminder/errbot.log'
+BOT_LOG_FILE = r'./errbot.log'
 BOT_LOG_LEVEL = logging.DEBUG
 
 BOT_IDENTITY = {
