@@ -4,10 +4,11 @@ import requests
 from bs4 import BeautifulSoup
 import schedule
 import time
+from datetime import datetime
 
 from errbot import BotPlugin, botcmd, CommandError
-from errbot.backends.slack import SlackRoom
 from dotenv import load_dotenv
+from errbot.backends.slack import slack_markdown_converter
 load_dotenv()
 
 
@@ -20,14 +21,21 @@ class RotaReminder(BotPlugin):
             self['saved_rotas'] = {}
 
         # Need to start this from a poller otherwise activate() will never finish
-        # self.start_poller(10, self.schedule, times=1)
+        # self.start_poller(5, self.schedule, times=1)
 
     def schedule(self):
-        schedule.every(5).seconds.do(self.post_all_rotas)
+        """ Sets up the scheduler to run every Monday
+        """
+        # schedule.every().monday.at('09:00').do(self.post_all_rotas)
+        schedule.every(10).seconds.do(self.post_all_rotas)
 
         while True:
+            # Will calc the exact amount of time to sleep before next run
+            time_to_next_run = schedule.idle_seconds()
+            if time_to_next_run > 0:
+                self.log.warn(time_to_next_run)
+                time.sleep(time_to_next_run)
             schedule.run_pending()
-            time.sleep(1)
 
     #################################
     # HELPER FUNCTIONS
@@ -157,10 +165,15 @@ class RotaReminder(BotPlugin):
         return user_list
 
     def post_all_rotas(self):
+        """ Used by the scheduler to post all saved rotas
+        """
         rota_info = self['saved_rotas']
 
         for k, v in rota_info.items():
             confluence_page_id = k
+            
+            # TODO Uncomment before release
+            # search_date = datetime.today().strftime('%Y-%m-%d')
             search_date = '2021-06-07'
 
             raw_html = RotaReminder.get_page_html(confluence_page_id)
@@ -230,23 +243,27 @@ class RotaReminder(BotPlugin):
     @botcmd()
     def display_rotas(self, msg, args):
         rota_info = self['saved_rotas']
-
+        
         for k, v in rota_info.items():
 
             name = v['rota_name']
             chan = v['slack_channel']
             creator = v['rota_creator']
+            conf_id = k
 
-            self.send_card(
-                title=name,
-                fields=(
-                    ('Slack Channel', chan),
-                    ('Creator', creator),
-                    ('Confluence Page ID', k),
-                ),
-                color='blue',
-                in_reply_to=msg,
+            text = f"{name.upper()}\n"
+            text = text + f"Post to Channel : {chan}\n"
+            text = text + f"Creator : {creator}\n"
+            text = text + f"Confluence : {conf_id}\n"
+
+            self.log.warn(text)
+
+            self.send(
+                self.build_identifier(f'#{msg.frm.room}'),
+                text=text,
+                in_reply_to=msg
             )
+        
 
     #################################
     # BOT TESTING COMMANDS
@@ -294,15 +311,6 @@ class RotaReminder(BotPlugin):
         self.send(
             self.build_identifier('#lab-day'),
             'I should print every 10 seconds',
-        )
-
-    @botcmd()
-    def test_join(self, msg, args):
-        self.build_identifier('#general').join()
-        self.log.warn(room)
-        self.send(
-            room,
-            'I got into the room',
         )
 
     #################################
