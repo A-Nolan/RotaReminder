@@ -243,6 +243,7 @@ class RotaReminder(BotPlugin):
     @botcmd()
     def display_rotas(self, msg, args):
         rota_info = self['saved_rotas']
+        returned_rotas = []
         
         for k, v in rota_info.items():
 
@@ -251,18 +252,16 @@ class RotaReminder(BotPlugin):
             creator = v['rota_creator']
             conf_id = k
 
-            text = f"{name.upper()}\n"
-            text = text + f"Post to Channel : {chan}\n"
-            text = text + f"Creator : {creator}\n"
-            text = text + f"Confluence : {conf_id}\n"
+            text = f"-- {name.upper()} --\n"
+            text = text + "-" * (len(name) + 6)
+            text = text + f"Channel : {chan:20}\t"
+            text = text + f"Creator : {creator:30}\t"
+            text = text + f"Confluence : {conf_id}"
 
-            self.log.warn(text)
+            returned_rotas.append(text)
 
-            self.send(
-                self.build_identifier(f'#{msg.frm.room}'),
-                text=text,
-                in_reply_to=msg
-            )
+        ret_str = '\n'.join(returned_rotas)
+        return f"\`\`\`{ret_str}\`\`\`"
         
 
     #################################
