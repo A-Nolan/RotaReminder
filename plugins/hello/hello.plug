@@ -1,9 +1,0 @@
-[Core]
-Name = Hello
-Module = hello
-
-[Documentation]
-Description = This is used to test out a hello example
-
-[Python]
-Version = 2+

@@ -8,12 +8,13 @@ from datetime import datetime
 
 from errbot import BotPlugin, botcmd, CommandError
 from dotenv import load_dotenv
-from errbot.backends.slack import slack_markdown_converter
 load_dotenv()
 
 
 class RotaReminder(BotPlugin):
-    """Errbot plugin to help automate slack reminders"""
+    """
+    https://zendesk.atlassian.net/wiki/spaces/~332665210/pages/4951083676/RotaReminder+Documentation
+    """
 
     def activate(self):
         super().activate()
@@ -131,7 +132,6 @@ class RotaReminder(BotPlugin):
             
         return header_list
 
-    # TODO Handle two users in one column e.g @Aaron Nolan + @Iulia Birlaneau
     @staticmethod
     def get_users_from_table(table_soup, search_date):
         """Get all the specified users from the dates row as a list
@@ -164,17 +164,17 @@ class RotaReminder(BotPlugin):
 
         return user_list
 
-    def post_all_rotas(self):
+    def post_all_rotas(self, search_date=''):
         """ Used by the scheduler to post all saved rotas
         """
         rota_info = self['saved_rotas']
+        docs_link = 'https://zendesk.atlassian.net/wiki/spaces/~332665210/pages/4951083676/RotaReminder+Documentation'
 
         for k, v in rota_info.items():
             confluence_page_id = k
             
-            # TODO Uncomment before release
-            # search_date = datetime.today().strftime('%Y-%m-%d')
-            search_date = '2021-06-07'
+            if not search_date:
+                search_date = datetime.today().strftime('%Y-%m-%d')
 
             raw_html = RotaReminder.get_page_html(confluence_page_id)
             table_html = RotaReminder.get_table_html(raw_html)
@@ -193,6 +193,7 @@ class RotaReminder(BotPlugin):
                 field_list.append(field)
 
             self.send_card(
+                summary='Use (!help RotaReminder) for documentation',
                 to=self.build_identifier(v['slack_channel']),
                 title=raw_html['title'],
                 link=page_url,
@@ -206,14 +207,24 @@ class RotaReminder(BotPlugin):
     #################################
 
     @botcmd(split_args_with=', ')
-    def add_rota(self, msg, args):
+    def rota_add(self, msg, args):
         """
-        Add rota to saved list - Usage: !add_rota <rota_name>, <confluence_page_id>, <slack_channel>
+        Add rota to saved list - Usage: !rota add <rota_name>, <confluence_page_id>, <slack_channel>
         """
+
+        if not len(args) == 3:
+            return "\`\`\`Command should have 3 args, separated by commas\`\`\`"
 
         rota_name = args[0]
         page_id = args[1]
-        slack_channel = args[2]
+
+        # Private channels cannot be mentioned directly
+        # This handles this case by stripping the '#'
+        if args[2][0] == '#':
+            slack_channel = args[2][1:]
+        else:
+            slack_channel = args[2]
+
         creator = msg.frm.fullname.split(' ', 1)
 
         rota_info = self['saved_rotas']
@@ -225,23 +236,34 @@ class RotaReminder(BotPlugin):
 
         self['saved_rotas'] = rota_info
         ret_str = f'Thanks {creator[0]}, I have added {rota_name} to the list!\n'
-        ret_str = ret_str + f'It will be posted in #{slack_channel} every Monday at 9am\n'
-        return ret_str + f'Please ensure I am added to #{slack_channel}, I cannot add myself :('
+        ret_str += f'It will be posted in #{slack_channel} every Monday at 9am\n'
+        ret_str += f'Please ensure I am added to #{slack_channel}, I cannot add myself :('
+
+        return f"\`\`\`{ret_str}\`\`\`"
 
     @botcmd()
-    def remove_rota(self, msg, args):
+    def rota_remove(self, msg, args):
+        """
+        Remove a rota from saved list - Usage: !rota remove <confluence_page_id>
+        """
         rota_info = self['saved_rotas']
+        ret_str = ''
 
         try:
             del rota_info[args]
             self['saved_rotas'] = rota_info
-            return f'{args} was successfully removed from the list'
+            ret_str += f'{args} was successfully removed from the list'
         except KeyError:
             self['saved_rotas'] = rota_info
-            return f'{args} was not in the saved rota IDs, please enter a valid ID'
+            ret_str += f'{args} was not in the saved rota IDs, please enter a valid ID'
+
+        return f"\`\`\`{ret_str}\`\`\`"
 
     @botcmd()
-    def display_rotas(self, msg, args):
+    def rota_display(self, msg, args):
+        """
+        Show all saved rotas - Usage: !rota display
+        """
         rota_info = self['saved_rotas']
         returned_rotas = []
         
@@ -255,7 +277,6 @@ class RotaReminder(BotPlugin):
             self.log.warn(len(name) + 6)
 
             text = f"-- {name.upper()} --\n"
-            text = text + "_" * (len(name) + 6) + "\n"
             text = text + f"Channel : {chan:20}\t"
             text = text + f"Creator : {creator:30}\t"
             text = text + f"Confluence : {conf_id}"
@@ -267,57 +288,19 @@ class RotaReminder(BotPlugin):
         
 
     #################################
-    # BOT TESTING COMMANDS
-    #################################
-
-    @botcmd(split_args_with=", ")
-    def test_display_rota(self, msg, args):
-        """
-        Display a single rota - Usage: !test_display_rota <confluence_page_id>, <YYYY-MM-DD>
-        """
-
-        confluence_page_id = args[0]
-        search_date = args[1]
-        
-        raw_html = RotaReminder.get_page_html(confluence_page_id)
-        table_html = RotaReminder.get_table_html(raw_html)
-        headers = RotaReminder.get_table_headers(table_html)
-        users = RotaReminder.get_users_from_table(table_html, search_date)
-        
-        field_list = []
-        page_url = f'https://zendesk.atlassian.net/wiki/spaces/TALK/pages/{confluence_page_id}' 
-
-        for i in range(len(headers)):
-            if users[i] == 'None':
-                field = [headers[i], ' - ']
-            else:
-                slack_user = '@' + RotaReminder.get_slack_username(users[i])
-                field = [headers[i], slack_user]
-            field_list.append(field)
-
-        self.send_card(
-            title=raw_html['title'],
-            link=page_url,
-            fields=field_list,
-            color='red',
-            in_reply_to=msg,
-        )
-
-    @botcmd()
-    def test_storage_read(self, msg, args):
-        return self['saved_rotas']
-
-    
-    def test_schedule(self):
-        self.send(
-            self.build_identifier('#lab-day'),
-            'I should print every 10 seconds',
-        )
-
-    #################################
     # ADMIN COMMANDS
     #################################
 
     @botcmd()
-    def clear_saved_rotas(self, msg, args):
+    def admin_clear_all_rotas(self, msg, args):
+        """
+        Will remove all saved rotas - Usage: !admin clear all rotas
+        """
         self['saved_rotas'] = {}
+
+    @botcmd()
+    def admin_test_post_rotas(self, msg, args):
+        """
+        Used to test rota posting, WILL PING PEOPLE - Usage: !admin test post rotas <YYYY-MM-DD>
+        """
+        self.post_all_rotas(args)
