@@ -225,7 +225,7 @@ class RotaReminder(BotPlugin):
 
         self['saved_rotas'] = rota_info
         ret_str = f'Thanks {creator[0]}, I have added {rota_name} to the list!\n'
-        ret_str = ret_str + f'It will be posted in #{slack_channel} every Monday at 9am'
+        ret_str = ret_str + f'It will be posted in #{slack_channel} every Monday at 9am\n'
         return ret_str + f'Please ensure I am added to #{slack_channel}, I cannot add myself :('
 
     @botcmd()
@@ -252,8 +252,10 @@ class RotaReminder(BotPlugin):
             creator = v['rota_creator']
             conf_id = k
 
+            self.log.warn(len(name) + 6)
+
             text = f"-- {name.upper()} --\n"
-            text = text + "-" * (len(name) + 6)
+            text = text + "_" * (len(name) + 6) + "\n"
             text = text + f"Channel : {chan:20}\t"
             text = text + f"Creator : {creator:30}\t"
             text = text + f"Confluence : {conf_id}"
