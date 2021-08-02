@@ -46,4 +46,4 @@ ACCESS_CONTROLS = {
 HIDE_RESTRICTED_COMMANDS = True
 HIDE_RESTRICTED_ACCESS = True
 
-DIVERT_TO_THREAD = ('help', 'display_rotas', 'add_rota', 'remove_rota', )
+DIVERT_TO_THREAD = ('help', 'rota_display', 'rota_add', 'rota_remove')

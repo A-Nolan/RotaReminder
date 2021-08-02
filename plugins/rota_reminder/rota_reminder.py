@@ -6,6 +6,8 @@ import schedule
 import time
 from datetime import datetime
 
+from rota_exceptions import *
+
 from errbot import BotPlugin, botcmd, CommandError
 from dotenv import load_dotenv
 load_dotenv()
@@ -39,7 +41,74 @@ class RotaReminder(BotPlugin):
             schedule.run_pending()
 
     #################################
-    # HELPER FUNCTIONS
+    # DATABASE HELPER FUNCTIONS
+    #################################
+
+    def get_all_rotas(self):
+        headers = {
+            'Authorization': f'Bearer {os.environ.get("AIRTABLE_API_TOKEN")}',
+        }
+
+        try:
+            response = requests.get(f'https://api.airtable.com/v0/{os.environ.get("AIRTABLE_BASE_ID")}/Table%201', headers=headers)
+            exception_handler(response)
+        except Exception as e:
+            self.log_info(str(e), error=True)
+            return 'An error has occured, my admins have been notified! Sorry!'
+    
+        return response.json()['records']
+
+    def add_rota(self, conf_id, name, creator, channel):
+        headers = {
+            'Authorization': f'Bearer {os.environ.get("AIRTABLE_API_TOKEN")}',
+            'Content-Type': 'application/json',
+        }
+
+        data = (
+            f'{{ "fields": {{ "confluence_id": "{conf_id}", "rota_name": "{name}", "creator": "{creator}", "channel": "{channel}" }} }}'
+        )
+
+        try:
+            response = requests.post(f'https://api.airtable.com/v0/{os.environ.get("AIRTABLE_BASE_ID")}/Table%201', headers=headers, data=data)
+            exception_handler(response)
+        except Exception as e:
+            self.log_info(str(e), error=True)
+            return 'An error has occured, my admins have been notified! Sorry!'
+
+        self.log_info(response.json())
+        res_dict = response.json()['fields']
+
+        ret_str = (
+            f'Thanks {res_dict["creator"]}! I have added {res_dict["rota_name"]} to the list\n'
+            f'It will be posted in #{res_dict["channel"]} every Monday at 9am\n'
+            f'Please ensure I am added to #{res_dict["channel"]} or I may not be able to post there :('
+        )
+
+        return ret_str
+
+    def delete_rota(self, rota_identifier):
+        headers = {
+            'Authorization': f'Bearer {os.environ.get("AIRTABLE_API_TOKEN")}',
+        }
+
+        rotas = self.get_all_rotas()
+
+        for rota in rotas:
+            if rota_identifier in rota['fields'].values():
+                try:
+                    response = requests.delete(f'https://api.airtable.com/v0/{os.environ.get("AIRTABLE_BASE_ID")}/Table%201/{rota["id"]}', headers=headers)
+                    exception_handler(response)
+                except Exception as e:
+                    self.log_info(str(e), error=True)
+                    return 'An error has occured, my admins have been notified! Sorry!'
+                
+                return [rota['fields']['rota_name'], response.json()]
+
+        return False
+
+
+    #################################
+    # ROTA HELPER FUNCTIONS
     #################################
 
     @staticmethod
@@ -167,11 +236,10 @@ class RotaReminder(BotPlugin):
     def post_all_rotas(self, search_date=''):
         """ Used by the scheduler to post all saved rotas
         """
-        rota_info = self['saved_rotas']
-        docs_link = 'https://zendesk.atlassian.net/wiki/spaces/~332665210/pages/4951083676/RotaReminder+Documentation'
+        rotas = self.get_all_rotas()
 
-        for k, v in rota_info.items():
-            confluence_page_id = k
+        for rota in rotas:
+            confluence_page_id = rota['fields']['confluence_id']
             
             if not search_date:
                 search_date = datetime.today().strftime('%Y-%m-%d')
@@ -194,13 +262,31 @@ class RotaReminder(BotPlugin):
 
             self.send_card(
                 summary='Use (!help RotaReminder) for documentation',
-                to=self.build_identifier(v['slack_channel']),
+                to=self.build_identifier('#' + rota['fields']['channel']),
                 title=raw_html['title'],
                 link=page_url,
                 fields=field_list,
                 color='red',
             )
 
+    def log_info(self, response, error=False, msg_details=[]):
+        if error:
+            self.send(
+                self.build_identifier('#talk-rota-logs'),
+                (
+                    "@aaron.nolan and @jasonshawn.dsouza\n"
+                    f"{msg_details}\n"
+                    f"\`\`\`{response}\`\`\`"
+                ),
+            )
+        else:
+            self.send(
+                self.build_identifier('#talk-rota-logs'),
+                (
+                    f"{msg_details}\n"
+                    f"\`\`\`{response}\`\`\`"
+                ),
+            )
 
     #################################
     # BOT COMMANDS
@@ -215,6 +301,7 @@ class RotaReminder(BotPlugin):
         if not len(args) == 3:
             return "\`\`\`Command should have 3 args, separated by commas\`\`\`"
 
+        self.log_info(msg, msg_details=[msg.frm.fullname, msg.to.channelname])
         rota_name = args[0]
         page_id = args[1]
 
@@ -225,20 +312,9 @@ class RotaReminder(BotPlugin):
         else:
             slack_channel = args[2]
 
-        creator = msg.frm.fullname.split(' ', 1)
+        creator = msg.frm.fullname
 
-        rota_info = self['saved_rotas']
-        rota_info[page_id] = {
-            'rota_name': rota_name,
-            'slack_channel': '#' + slack_channel,
-            'rota_creator': msg.frm.fullname
-        }
-
-        self['saved_rotas'] = rota_info
-        ret_str = f'Thanks {creator[0]}, I have added {rota_name} to the list!\n'
-        ret_str += f'It will be posted in #{slack_channel} every Monday at 9am\n'
-        ret_str += f'Please ensure I am added to #{slack_channel}, I cannot add myself :('
-
+        ret_str = self.add_rota(page_id, rota_name, creator, slack_channel)
         return f"\`\`\`{ret_str}\`\`\`"
 
     @botcmd()
@@ -246,16 +322,22 @@ class RotaReminder(BotPlugin):
         """
         Remove a rota from saved list - Usage: !rota remove <confluence_page_id>
         """
-        rota_info = self['saved_rotas']
         ret_str = ''
 
-        try:
-            del rota_info[args]
-            self['saved_rotas'] = rota_info
-            ret_str += f'{args} was successfully removed from the list'
-        except KeyError:
-            self['saved_rotas'] = rota_info
-            ret_str += f'{args} was not in the saved rota IDs, please enter a valid ID'
+        response = self.delete_rota(args)
+
+        if response:
+            if isinstance(response, list):
+                self.log_info(response, msg_details=[msg.frm.fullname, msg.to.channelname])
+                ret_str = f'{response[0]} has successfully been removed from the rota list'
+            else:
+                ret_str = response
+        else:
+            ret_str = (
+                'That rota has not been found\n'
+                'Please ensure you entered the correct name/confluence id\n'
+                'You can use "!rota display" to view all saved rotas'
+            )
 
         return f"\`\`\`{ret_str}\`\`\`"
 
@@ -264,22 +346,28 @@ class RotaReminder(BotPlugin):
         """
         Show all saved rotas - Usage: !rota display
         """
-        rota_info = self['saved_rotas']
+        rotas = self.get_all_rotas()
+
+        if isinstance(rotas, str):
+            return rotas
+
         returned_rotas = []
-        
-        for k, v in rota_info.items():
+        self.log_info(msg, msg_details=[msg.frm.fullname, msg.to.channelname])
 
-            name = v['rota_name']
-            chan = v['slack_channel']
-            creator = v['rota_creator']
-            conf_id = k
+        for rota in rotas:
 
-            self.log.warn(len(name) + 6)
+            conf_id = rota['fields']['confluence_id']
+            name = rota['fields']['rota_name']
+            creator = rota['fields']['creator']
+            channel = rota['fields']['channel']
 
-            text = f"-- {name.upper()} --\n"
-            text = text + f"Channel : {chan:20}\t"
-            text = text + f"Creator : {creator:30}\t"
-            text = text + f"Confluence : {conf_id}"
+            text = (
+                f'{name.upper()}\n'
+                f'Channel:\t\t #{channel}\n'
+                f'Creator:\t\t {creator}\n'
+                f'Confluence ID:\t {conf_id}\n'
+                f'====================================================='
+            )
 
             returned_rotas.append(text)
 
@@ -304,3 +392,10 @@ class RotaReminder(BotPlugin):
         Used to test rota posting, WILL PING PEOPLE - Usage: !admin test post rotas <YYYY-MM-DD>
         """
         self.post_all_rotas(args)
+
+    @botcmd()
+    def admin_test(self, msg, args):
+        """
+        Used to test rota posting, WILL PING PEOPLE - Usage: !admin test post rotas <YYYY-MM-DD>
+        """
+        return self.delete_rota(args)
