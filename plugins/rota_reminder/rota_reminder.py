@@ -7,6 +7,7 @@ import time
 from datetime import datetime
 
 from rota_exceptions import *
+from confluence_helper import ConfluenceHelper
 
 from errbot import BotPlugin, botcmd, CommandError
 from dotenv import load_dotenv
@@ -111,159 +112,43 @@ class RotaReminder(BotPlugin):
     # ROTA HELPER FUNCTIONS
     #################################
 
-    @staticmethod
-    def get_slack_username(confluence_acc_id):
-        """Get users slack name from their email on their confluence page
-        
-        params:
-            confluence_acc_id -> str
-
-        returns:
-            str
-        """
-
-        headers = {
-            "Accept": "application/json",
-        }
-
-        response = requests.get(
-            f"https://zendesk.atlassian.net/wiki/rest/api/user?accountId={confluence_acc_id}",
-            headers=headers,
-            auth=(os.environ.get("ATLASSIAN_USER"), os.environ.get("ATLASSIAN_TOKEN")),
-        ).json()["email"]
-        # Only grab the start of the email, this is their slack handle
-        return response.split("@")[0]
-
-    @staticmethod
-    def get_page_html(confluence_page_id):
-        """Get confluence page table html from confluence page id
-        
-        params:
-            confluence_page_id -> str
-
-        returns:
-            dict
-
-        raises:
-            CommandError
-        """
-
-        headers = {
-            "Content-Type": "application/json",
-        }
-
-        response = requests.get(
-            f"https://zendesk.atlassian.net/wiki/rest/api/content/{confluence_page_id}?expand=body.view",
-            headers=headers,
-            auth=(os.environ.get("ATLASSIAN_USER"), os.environ.get("ATLASSIAN_TOKEN")),
-        ).json()
-
-        if "statusCode" in response and response['statusCode'] == 404:
-            raise CommandError(f"Could not find Confluence Page for id {confluence_page_id}")
-        else:
-            return response
-
-    @staticmethod
-    def get_table_html(page_html):
-        """Get confluence page table html from html dict
-        
-        params:
-            page_html -> dict
-
-        returns:
-            Soup object
-        """
-
-        raw_html = page_html["body"]["view"]["value"]
-        soup = BeautifulSoup(raw_html, "html.parser")
-        table_html = soup.find("table", class_="confluenceTable")
-        return table_html
-
-    @staticmethod
-    def get_table_headers(table_soup):
-        """Get all the headers from the table as a list
-
-        params:
-            table_soup -> Soup object : Table html
-
-        returns
-            list
-        """
-
-        header_row = table_soup.find_next("th").parent
-        headers = header_row.find_all("th", attrs={"class": "confluenceTh"})
-
-        header_list = []
-
-        # [1:] to skip the first 'date' header
-        for header in headers[1:]:
-            header_list.append(header.text)
-            
-        return header_list
-
-    @staticmethod
-    def get_users_from_table(table_soup, search_date):
-        """Get all the specified users from the dates row as a list
-
-        params:
-            search_date -> str : Date formatted as YYYY-MM-DD
-            table_soup -> Soup object : Table html
-
-        returns
-            list
-        """
-
-        row = table_soup.find_next(
-            "time", attrs={"datetime": search_date}
-        ).parent.parent.parent  # Sorry :(
-        cells = row.find_all(
-            "td", attrs={"class": "confluenceTd"}
-        )
-
-        user_list = []
-
-        # [1:] to skip the first 'date' cell
-        for cell in cells[1:]:
-            # Check if there is a link in the cell, as it may be empty
-            if cell.find('a'):
-                user_id = cell.find('a')
-                user_list.append(user_id['data-account-id'])
-            else:
-                user_list.append('None')
-
-        return user_list
-
     def post_all_rotas(self, search_date=''):
         """ Used by the scheduler to post all saved rotas
         """
-        rotas = self.get_all_rotas()
+        rotas = ConfluenceHelper.get_all_rotas()
 
         for rota in rotas:
-            confluence_page_id = rota['fields']['confluence_id']
+            conf_page_id = rota['conf_id']
             
             if not search_date:
                 search_date = datetime.today().strftime('%Y-%m-%d')
 
-            raw_html = RotaReminder.get_page_html(confluence_page_id)
-            table_html = RotaReminder.get_table_html(raw_html)
-            headers = RotaReminder.get_table_headers(table_html)
-            users = RotaReminder.get_users_from_table(table_html, search_date)
+            page_html = ConfluenceHelper.get_page_html(conf_page_id)
+            storage_soup = ConfluenceHelper.get_page_storage_soup(page_html)
+            table_soup = ConfluenceHelper.get_table_soup(storage_soup)
+            table_headers = ConfluenceHelper.get_rota_table_headers(table_soup)
+            search_row = ConfluenceHelper.get_row_from_date(table_soup, search_date)
+            slack_names = ConfluenceHelper.get_slack_names_from_row(search_row)
             
             field_list = []
-            page_url = f'https://zendesk.atlassian.net/wiki/spaces/TALK/pages/{confluence_page_id}' 
+            page_url = f'https://zendesk.atlassian.net/wiki/spaces/TALK/pages/{conf_page_id}' 
 
-            for i in range(len(headers)):
-                if users[i] == 'None':
-                    field = [headers[i], ' - ']
-                else:
-                    slack_user = '@' + RotaReminder.get_slack_username(users[i])
-                    field = [headers[i], slack_user]
+            for pair in zip(table_headers, slack_names):
+                field = [pair[0], pair[1]]
                 field_list.append(field)
+
+            # for i in range(len(headers)):
+            #     if users[i] == 'None':
+            #         field = [headers[i], ' - ']
+            #     else:
+            #         slack_user = '@' + RotaReminder.get_slack_username(users[i])
+            #         field = [headers[i], slack_user]
+            #     field_list.append(field)
 
             self.send_card(
                 summary='Use (!help RotaReminder) for documentation',
-                to=self.build_identifier('#' + rota['fields']['channel']),
-                title=raw_html['title'],
+                to=self.build_identifier(rota['channel']),
+                title=rota['rota_name'],
                 link=page_url,
                 fields=field_list,
                 color='red',
@@ -399,3 +284,24 @@ class RotaReminder(BotPlugin):
         Used to test rota posting, WILL PING PEOPLE - Usage: !admin test post rotas <YYYY-MM-DD>
         """
         return self.delete_rota(args)
+
+    #################################
+    # ADMIN COMMANDS
+    #################################
+
+    @botcmd()
+    def rota_test(self, msg, args):
+        pass
+
+    @staticmethod
+    def post_rotas_from_conf():
+        headers = {
+            "Content-Type": "application/json",
+        }
+
+        response = requests.get(
+            f"https://zendesk.atlassian.net/wiki/rest/api/content/4951083676?expand=body.view",
+            headers=headers,
+            auth=(os.environ.get("ATLASSIAN_USER"), os.environ.get("ATLASSIAN_TOKEN")),
+        ).json()
+    
