@@ -2,29 +2,75 @@ import os
 import requests
 from bs4 import BeautifulSoup
 from errbot import CommandError
+import json
+from collections import namedtuple
+
+from requests.models import Response
 
 class ConfluenceHelper:
+
+    SAVED_ROTAS_PAGE_ID = '5169875015'
+
+    ## HELPERS FOR RETURNING ROTA DETAILS
+
     @staticmethod
-    def get_page_html(conf_page_id):
+    def get_page_from_id(conf_page_id):
         headers = {
             "Content-Type": "application/json",
         }
 
         response = requests.get(
-            f"https://zendesk.atlassian.net/wiki/rest/api/content/{conf_page_id}?expand=body.view",
+            f"https://zendesk.atlassian.net/wiki/rest/api/content/{conf_page_id}?expand=body.view,body.storage,version",
             headers=headers,
             auth=(os.environ.get("ATLASSIAN_USER"), os.environ.get("ATLASSIAN_TOKEN")),
-        ).json()
+        )
 
-        if "statusCode" in response and response['statusCode'] == 404:
+        if response.status_code != 200:
             raise CommandError(f"Could not find Confluence Page for id {conf_page_id}")
         else:
-            return response
+            return response.json()
+
+    @staticmethod
+    def update_confluence_page(version_no, title, updated_storage):
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+
+        payload = json.dumps({
+            "version": {
+                "number": version_no + 1
+            },
+            "title": title,
+            "type": 'page',
+            "body": {
+                "storage": {
+                    "value": updated_storage,
+                    "representation": "storage"
+                }
+            }
+        })
+
+        response = requests.put(
+            f'https://zendesk.atlassian.net/wiki/rest/api/content/{ConfluenceHelper.SAVED_ROTAS_PAGE_ID}',
+            data=payload,
+            headers=headers,
+            auth=(os.environ.get("ATLASSIAN_USER"), os.environ.get("ATLASSIAN_TOKEN")),
+        )
+
+        return response.json()
+
+    
+    @staticmethod
+    def get_page_view_soup(page_html):
+        raw_view = page_html['body']['view']['value']
+        view_soup = BeautifulSoup(raw_view, 'html.parser')
+        return view_soup
 
     
     @staticmethod
     def get_page_storage_soup(page_html):
-        raw_storage = page_html['body']['view']['value']
+        raw_storage = page_html['body']['storage']['value']
         storage_soup = BeautifulSoup(raw_storage, 'html.parser')
         return storage_soup
 
@@ -68,19 +114,15 @@ class ConfluenceHelper:
         cells = table_row.find_all('a')
         return [ConfluenceHelper.get_slack_names(cell['data-account-id']) for cell in cells]
 
+
+    ## HELPERS FOR MANIUPULATING ROTA LIST
+
     @staticmethod
     def get_all_rotas():
-        headers = {
-            "Content-Type": "application/json",
-        }
+        
+        page_html = ConfluenceHelper.get_page_from_id(ConfluenceHelper.SAVED_ROTAS_PAGE_ID)
 
-        response = requests.get(
-            "https://zendesk.atlassian.net/wiki/rest/api/content/5169875015?expand=body.storage",
-            headers=headers,
-            auth=(os.environ.get("ATLASSIAN_USER"), os.environ.get("ATLASSIAN_TOKEN")),
-        ).json()
-
-        raw_html = response['body']['storage']['value']
+        raw_html = page_html['body']['storage']['value']
         soup = BeautifulSoup(raw_html, 'html.parser')
         table = soup.find('table')
         rows = table.find_all('tr')
@@ -92,7 +134,13 @@ class ConfluenceHelper:
             rota_dict = {}
             rota_dict['rota_name'] = cells[0].text
             rota_dict['conf_id'] = cells[1].text
-            rota_dict['channel'] = cells[2].text
+            
+            chan = cells[2].text
+            if chan[:2] == '##':
+                rota_dict['channel'] = '<' + chan[1:] + '>'
+            else:
+                rota_dict['channel'] = chan
+
             rota_dict['creator'] = cells[3].text
                 
             rotas.append(rota_dict)
@@ -100,3 +148,49 @@ class ConfluenceHelper:
         return rotas
 
     
+    @staticmethod
+    def add_rota(rota_name, conf_id, channel, creator):
+
+        # This will add a new rota to the saved list
+
+        page_html = ConfluenceHelper.get_page_from_id(ConfluenceHelper.SAVED_ROTAS_PAGE_ID)
+
+        # These are required to be passed back
+        version_no = page_html['version']['number']
+        title = page_html['title']
+        original_storage = page_html['body']['storage']['value']
+
+        name_cell = f'<td><p>{rota_name}</p></td>'
+        id_cell = f'<td><p>{conf_id}</p></td>'
+        channel_cell = f'<td><p>{channel}</p></td>'
+        creator_cell = f'<td><p>{creator}</p></td>'
+
+        new_tag = '<tr>' + name_cell + id_cell + channel_cell + creator_cell + '</tr>'
+        updated_storage = original_storage[:-21] + new_tag + original_storage[-21:]
+
+        res = ConfluenceHelper.update_confluence_page(version_no, title, updated_storage)
+
+        RotaDetails = namedtuple('RotaDetails', 'name channel creator')
+        return RotaDetails(rota_name, channel, creator)
+
+
+    @staticmethod
+    def delete_rota(conf_id):
+
+        page_html = ConfluenceHelper.get_page_from_id(ConfluenceHelper.SAVED_ROTAS_PAGE_ID)
+
+        # These are required to be passed back
+        version_no = page_html['version']['number']
+        title = page_html['title']
+        original_storage = page_html['body']['storage']['value']
+
+        soup = BeautifulSoup(original_storage, 'html.parser')
+
+        deleted = soup.find(string=conf_id).parent.parent.parent.extract()
+
+        res = ConfluenceHelper.update_confluence_page(version_no, title, str(soup))
+
+        info = [val.text for val in deleted.find_all('p')]
+
+        RequestResponse = namedtuple('RequestResponse', 'error rota_name')
+        return RequestResponse(False, info[0])

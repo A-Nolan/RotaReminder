@@ -12,7 +12,7 @@ cryptography==3.4.7
 daemonize==2.5.0
 deepmerge==0.3.0
 dulwich==0.20.23
-errbot==6.1.7
+errbot==6.1.8
 Flask==2.0.1
 idna==2.10
 itsdangerous==2.0.1

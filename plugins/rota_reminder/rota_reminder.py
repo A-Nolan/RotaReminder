@@ -5,11 +5,13 @@ from bs4 import BeautifulSoup
 import schedule
 import time
 from datetime import datetime
+from collections import namedtuple
 
 from rota_exceptions import *
 from confluence_helper import ConfluenceHelper
 
 from errbot import BotPlugin, botcmd, CommandError
+from errbot.backends.slack import SlackBackend, SlackRoom
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -41,72 +43,6 @@ class RotaReminder(BotPlugin):
                 time.sleep(time_to_next_run)
             schedule.run_pending()
 
-    #################################
-    # DATABASE HELPER FUNCTIONS
-    #################################
-
-    def get_all_rotas(self):
-        headers = {
-            'Authorization': f'Bearer {os.environ.get("AIRTABLE_API_TOKEN")}',
-        }
-
-        try:
-            response = requests.get(f'https://api.airtable.com/v0/{os.environ.get("AIRTABLE_BASE_ID")}/Table%201', headers=headers)
-            exception_handler(response)
-        except Exception as e:
-            self.log_info(str(e), error=True)
-            return 'An error has occured, my admins have been notified! Sorry!'
-    
-        return response.json()['records']
-
-    def add_rota(self, conf_id, name, creator, channel):
-        headers = {
-            'Authorization': f'Bearer {os.environ.get("AIRTABLE_API_TOKEN")}',
-            'Content-Type': 'application/json',
-        }
-
-        data = (
-            f'{{ "fields": {{ "confluence_id": "{conf_id}", "rota_name": "{name}", "creator": "{creator}", "channel": "{channel}" }} }}'
-        )
-
-        try:
-            response = requests.post(f'https://api.airtable.com/v0/{os.environ.get("AIRTABLE_BASE_ID")}/Table%201', headers=headers, data=data)
-            exception_handler(response)
-        except Exception as e:
-            self.log_info(str(e), error=True)
-            return 'An error has occured, my admins have been notified! Sorry!'
-
-        self.log_info(response.json())
-        res_dict = response.json()['fields']
-
-        ret_str = (
-            f'Thanks {res_dict["creator"]}! I have added {res_dict["rota_name"]} to the list\n'
-            f'It will be posted in #{res_dict["channel"]} every Monday at 9am\n'
-            f'Please ensure I am added to #{res_dict["channel"]} or I may not be able to post there :('
-        )
-
-        return ret_str
-
-    def delete_rota(self, rota_identifier):
-        headers = {
-            'Authorization': f'Bearer {os.environ.get("AIRTABLE_API_TOKEN")}',
-        }
-
-        rotas = self.get_all_rotas()
-
-        for rota in rotas:
-            if rota_identifier in rota['fields'].values():
-                try:
-                    response = requests.delete(f'https://api.airtable.com/v0/{os.environ.get("AIRTABLE_BASE_ID")}/Table%201/{rota["id"]}', headers=headers)
-                    exception_handler(response)
-                except Exception as e:
-                    self.log_info(str(e), error=True)
-                    return 'An error has occured, my admins have been notified! Sorry!'
-                
-                return [rota['fields']['rota_name'], response.json()]
-
-        return False
-
 
     #################################
     # ROTA HELPER FUNCTIONS
@@ -124,7 +60,7 @@ class RotaReminder(BotPlugin):
                 search_date = datetime.today().strftime('%Y-%m-%d')
 
             page_html = ConfluenceHelper.get_page_html(conf_page_id)
-            storage_soup = ConfluenceHelper.get_page_storage_soup(page_html)
+            storage_soup = ConfluenceHelper.get_page_view_soup(page_html)
             table_soup = ConfluenceHelper.get_table_soup(storage_soup)
             table_headers = ConfluenceHelper.get_rota_table_headers(table_soup)
             search_row = ConfluenceHelper.get_row_from_date(table_soup, search_date)
@@ -144,6 +80,8 @@ class RotaReminder(BotPlugin):
             #         slack_user = '@' + RotaReminder.get_slack_username(users[i])
             #         field = [headers[i], slack_user]
             #     field_list.append(field)
+
+            self.log.warn(rota['channel'])
 
             self.send_card(
                 summary='Use (!help RotaReminder) for documentation',
@@ -186,44 +124,52 @@ class RotaReminder(BotPlugin):
         if not len(args) == 3:
             return "\`\`\`Command should have 3 args, separated by commas\`\`\`"
 
-        self.log_info(msg, msg_details=[msg.frm.fullname, msg.to.channelname])
         rota_name = args[0]
         page_id = args[1]
 
-        # Private channels cannot be mentioned directly
-        # This handles this case by stripping the '#'
-        if args[2][0] == '#':
-            slack_channel = args[2][1:]
+        if args[2][0] == "<":
+            slack_channel = "#" + args[2][1:-2]
         else:
-            slack_channel = args[2]
+            slack_channel = "#" + args[2]
 
         creator = msg.frm.fullname
 
-        ret_str = self.add_rota(page_id, rota_name, creator, slack_channel)
-        return f"\`\`\`{ret_str}\`\`\`"
+        # ret_str = self.add_rota(page_id, rota_name, creator, slack_channel)
+        # return f"\`\`\`{ret_str}\`\`\`"
+
+        rota_details = ConfluenceHelper.add_rota(rota_name, page_id, slack_channel, creator)
+        return (
+            f'\`\`\`Thanks {creator}! I have added {rota_name} to the list\n'
+            f'It will be posted in {slack_channel} every Monday at 9am\n'
+            f'Please ensure I am added to {slack_channel} or I may not be able to post there :(\`\`\`'
+        )
 
     @botcmd()
     def rota_remove(self, msg, args):
         """
         Remove a rota from saved list - Usage: !rota remove <confluence_page_id>
         """
-        ret_str = ''
+        # ret_str = ''
 
-        response = self.delete_rota(args)
+        # response = self.delete_rota(args)
 
-        if response:
-            if isinstance(response, list):
-                self.log_info(response, msg_details=[msg.frm.fullname, msg.to.channelname])
-                ret_str = f'{response[0]} has successfully been removed from the rota list'
-            else:
-                ret_str = response
-        else:
-            ret_str = (
-                'That rota has not been found\n'
-                'Please ensure you entered the correct name/confluence id\n'
-                'You can use "!rota display" to view all saved rotas'
-            )
+        # if response:
+        #     if isinstance(response, list):
+        #         self.log_info(response, msg_details=[msg.frm.fullname, msg.to.channelname])
+        #         ret_str = f'{response[0]} has successfully been removed from the rota list'
+        #     else:
+        #         ret_str = response
+        # else:
+        #     ret_str = (
+        #         'That rota has not been found\n'
+        #         'Please ensure you entered the correct name/confluence id\n'
+        #         'You can use "!rota display" to view all saved rotas'
+        #     )
 
+        # return f"\`\`\`{ret_str}\`\`\`"
+
+        res_tuple = ConfluenceHelper.delete_rota(args)
+        ret_str = f'{res_tuple.rota_name} has successfully been removed from the rota list'
         return f"\`\`\`{ret_str}\`\`\`"
 
     @botcmd()
@@ -231,24 +177,26 @@ class RotaReminder(BotPlugin):
         """
         Show all saved rotas - Usage: !rota display
         """
-        rotas = self.get_all_rotas()
+        rotas = ConfluenceHelper.get_all_rotas()
 
         if isinstance(rotas, str):
             return rotas
 
         returned_rotas = []
-        self.log_info(msg, msg_details=[msg.frm.fullname, msg.to.channelname])
 
         for rota in rotas:
 
-            conf_id = rota['fields']['confluence_id']
-            name = rota['fields']['rota_name']
-            creator = rota['fields']['creator']
-            channel = rota['fields']['channel']
+            conf_id = rota['conf_id']
+            name = rota['rota_name']
+            creator = rota['creator']
+            if rota['channel'][:2] == '##':
+                channel = rota['channel'][1:]
+            else:
+                channel = rota['channel']
 
             text = (
                 f'{name.upper()}\n'
-                f'Channel:\t\t #{channel}\n'
+                f'Channel:\t\t {channel}\n'
                 f'Creator:\t\t {creator}\n'
                 f'Confluence ID:\t {conf_id}\n'
                 f'====================================================='
