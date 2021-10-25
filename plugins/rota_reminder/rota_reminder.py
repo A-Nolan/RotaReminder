@@ -6,6 +6,7 @@ import schedule
 import time
 from datetime import datetime
 from collections import namedtuple
+import random
 
 from rota_exceptions import *
 from confluence_helper import ConfluenceHelper
@@ -52,6 +53,7 @@ class RotaReminder(BotPlugin):
         """ Used by the scheduler to post all saved rotas
         """
         rotas = ConfluenceHelper.get_all_rotas()
+        rc = lambda: random.randint(0, 255) # Generate random colour
 
         for rota in rotas:
             conf_page_id = rota['conf_id']
@@ -59,7 +61,7 @@ class RotaReminder(BotPlugin):
             if not search_date:
                 search_date = datetime.today().strftime('%Y-%m-%d')
 
-            page_html = ConfluenceHelper.get_page_html(conf_page_id)
+            page_html = ConfluenceHelper.get_page_from_id(conf_page_id)
             storage_soup = ConfluenceHelper.get_page_view_soup(page_html)
             table_soup = ConfluenceHelper.get_table_soup(storage_soup)
             table_headers = ConfluenceHelper.get_rota_table_headers(table_soup)
@@ -73,15 +75,7 @@ class RotaReminder(BotPlugin):
                 field = [pair[0], pair[1]]
                 field_list.append(field)
 
-            # for i in range(len(headers)):
-            #     if users[i] == 'None':
-            #         field = [headers[i], ' - ']
-            #     else:
-            #         slack_user = '@' + RotaReminder.get_slack_username(users[i])
-            #         field = [headers[i], slack_user]
-            #     field_list.append(field)
-
-            self.log.warn(rota['channel'])
+            rand_color = '#%02X%02X%02X' % (rc(), rc(), rc())
 
             self.send_card(
                 summary='Use (!help RotaReminder) for documentation',
@@ -89,7 +83,7 @@ class RotaReminder(BotPlugin):
                 title=rota['rota_name'],
                 link=page_url,
                 fields=field_list,
-                color='red',
+                color=rand_color,
             )
 
     def log_info(self, response, error=False, msg_details=[]):

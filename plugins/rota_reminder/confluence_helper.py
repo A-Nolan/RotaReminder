@@ -9,7 +9,7 @@ from requests.models import Response
 
 class ConfluenceHelper:
 
-    SAVED_ROTAS_PAGE_ID = '5169875015'
+    SAVED_ROTAS_PAGE_ID = '4951083676'
 
     ## HELPERS FOR RETURNING ROTA DETAILS
 
@@ -111,8 +111,40 @@ class ConfluenceHelper:
 
     @staticmethod
     def get_slack_names_from_row(table_row):
-        cells = table_row.find_all('a')
-        return [ConfluenceHelper.get_slack_names(cell['data-account-id']) for cell in cells]
+
+        teams = {
+            'Red Pandas': '@red-pandas',
+            'Canaries': '@canaries',
+            'Mongooses': '@mongooses',
+            'Kelpies': '@kelpie',
+            'Kelpie': '@kelpie',
+            'Zenguins': '@zenguins',
+        }
+
+        name_list = []
+        cells = table_row.find_all('td')
+
+
+        # Skip the first cell as it's the date
+        for cell in cells[1:]:
+            if cell.text in teams:
+                name_list.append(teams[cell.text])
+            else:
+                links = cell.find_all('a', 'user-mention')
+                if len(links) == 0 and not cell.text:
+                    name_list.append('None')
+                elif len(links) == 0 and cell.text:
+                    name_list.append(cell.text)
+                elif len(links) == 1:
+                    name_list.append(ConfluenceHelper.get_slack_names(links[0]['data-account-id']))
+                else:
+                    engineers = ''
+                    for link in links:
+                        engineers += ConfluenceHelper.get_slack_names(link['data-account-id']) + '\n'
+
+                    name_list.append(engineers[:-1])
+
+        return name_list
 
 
     ## HELPERS FOR MANIUPULATING ROTA LIST
@@ -165,8 +197,10 @@ class ConfluenceHelper:
         channel_cell = f'<td><p>{channel}</p></td>'
         creator_cell = f'<td><p>{creator}</p></td>'
 
+        insert_index = original_storage.find('</tbody>')
+
         new_tag = '<tr>' + name_cell + id_cell + channel_cell + creator_cell + '</tr>'
-        updated_storage = original_storage[:-21] + new_tag + original_storage[-21:]
+        updated_storage = original_storage[:insert_index] + new_tag + original_storage[insert_index:]
 
         res = ConfluenceHelper.update_confluence_page(version_no, title, updated_storage)
 
